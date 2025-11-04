@@ -127,16 +127,19 @@ void reportStatus(const char *source) {
   Serial.print(source);
   Serial.print(" mode=");
   Serial.print(modeName(currentMode));
+  /*
   Serial.print(" sense_raw=");
   Serial.print(lastSenseState);
   Serial.print(" mains=");
   Serial.print(mainsPresent ? "ON" : "OFF");
+  */
   Serial.print(" light=");
   Serial.print(isOn ? "ON" : "OFF");
   Serial.print(" brightness=");
   Serial.print(rawToPercent(brightness));
-  Serial.print("% pwm=");
-  Serial.println(pwmMax - brightness);
+  Serial.println("%");
+  // Serial.print("% pwm=");
+  // Serial.println(pwmMax - brightness);
 }
 
 // Fetch brightness from EEPROM if signature matches.
