@@ -52,6 +52,11 @@ String clientIdBuffer;
 
 // Helpers ------------------------------------------------------------------
 
+/**
+ * @brief Returns true if the given string consists solely of digits.
+ *
+ * Used for validating MQTT payloads before attempting to convert to numbers.
+ */
 bool isNumeric(const String &text) {
   if (text.length() == 0) {
     return false;
@@ -64,8 +69,11 @@ bool isNumeric(const String &text) {
   return true;
 }
 
-// Converts textual MQTT payloads (e.g. "42" or "42%") into internal PWM values.
-// Returns -1 when the payload is invalid so callers can skip acting on it.
+/**
+ * @brief Converts textual MQTT payloads (e.g. "42" or "42%") into PWM raw values.
+ *
+ * @return PWM raw value on success, or -1 when the payload is invalid.
+ */
 int parseBrightnessValue(String payload) {
   payload.trim();
   if (payload.length() == 0) {
@@ -88,7 +96,9 @@ int parseBrightnessValue(String payload) {
   return static_cast<int>(scalePercentToRaw(static_cast<uint8_t>(value)));
 }
 
-// Clamp incoming MQTT brightness requests so "OFF" becomes the minimum safe glow.
+/**
+ * @brief Clamps incoming MQTT brightness to the minimum safe glow.
+ */
 uint16_t clampMqttRaw(uint16_t raw) {
   if (raw < mqttMinBrightnessRaw) {
     return mqttMinBrightnessRaw;
@@ -96,7 +106,11 @@ uint16_t clampMqttRaw(uint16_t raw) {
   return raw;
 }
 
-// Publish retained online/offline marker for HA availability.
+/**
+ * @brief Publishes retained availability messages so Home Assistant knows the device is online.
+ *
+ * Uses a retained topic and caches the last state to avoid redundant publishes.
+ */
 void publishAvailability(bool online, bool force = false) {
   if (!mqttClient.connected()) {
     return;
@@ -111,8 +125,12 @@ void publishAvailability(bool online, bool force = false) {
   hasAvailability = true;
 }
 
-// Push light state and brightness (cached while mains are off) to MQTT.
-// The cached value helps Home Assistant stay in sync even when mains is temporarily absent.
+/**
+ * @brief Pushes light state + brightness to MQTT, caching desired brightness when mains are off.
+ *
+ * The cached value keeps Home Assistant in sync through mains glitches by reusing
+ * the last commanded brightness once power returns.
+ */
 void publishStateAndBrightness(bool force = false) {
   if (!mqttClient.connected() || !statusView.getBrightness) {
     return;
@@ -150,8 +168,12 @@ void publishStateAndBrightness(bool force = false) {
   hasPublished = true;
 }
 
-// MQTT command handler: supports on/off and brightness set topics.
-// Normalizes payloads (trim/upper-case) before handing them to the dimmer core.
+/**
+ * @brief MQTT callback that routes command topics to the dimmer core.
+ *
+ * Handles on/off requests as well as brightness changes, normalizing payloads
+ * before invoking the holdAndPersist callback.
+ */
 void handleMqttMessage(char *topic, uint8_t *payload, unsigned int length) {
   String message;
   message.reserve(length);
@@ -191,7 +213,11 @@ void handleMqttMessage(char *topic, uint8_t *payload, unsigned int length) {
   }
 }
 
-// Kick off a Wi-Fi connection attempt if we're idle. Tracks when the attempt began for timeouts.
+/**
+ * @brief Begins a Wi-Fi connection attempt if one is not already in progress.
+ *
+ * Resets timers so handleWiFiState() can track timeouts and retries.
+ */
 void startWiFiAttempt() {
   if (wifiConnecting || !configuredSsid) {
     return;
@@ -206,7 +232,9 @@ void startWiFiAttempt() {
   nextWifiAttemptMs = 0;
 }
 
-// Cooperative Wi-Fi state machine. Handles connect success, failures, and backoff scheduling.
+/**
+ * @brief Cooperative Wi-Fi state machine that handles success, failure, and retry backoff.
+ */
 void handleWiFiState() {
   const unsigned long now = millis();
   const wl_status_t status = WiFi.status();
@@ -250,7 +278,11 @@ void handleWiFiState() {
   }
 }
 
-// Bring MQTT online once Wi-Fi is connected; also reuses the availability topic as LWT.
+/**
+ * @brief Ensures the MQTT client is connected once Wi-Fi is available.
+ *
+ * Also refreshes the availability topic and configures the Last Will message.
+ */
 void ensureMqttConnection() {
   if (!wifiConnected || !mqttHost) {
     if (mqttClient.connected()) {
@@ -313,7 +345,9 @@ void ensureMqttConnection() {
 
 }  // namespace
 
-// API called from the sketch to hand over credentials, callbacks, and MQTT config.
+/**
+ * @brief Initializes networking with credentials + callbacks supplied by the sketch.
+ */
 void networkInit(const char *ssid,
                  const char *password,
                  uint32_t connectTimeoutMs,
@@ -343,7 +377,7 @@ void networkInit(const char *ssid,
   startWiFiAttempt();
 }
 
-// Must be driven frequently from loop(); keeps Wi-Fi + MQTT responsive.
+/** @brief Pumps the Wi-Fi and MQTT state machines; call from the main loop. */
 void networkLoop() {
   handleWiFiState();
   ensureMqttConnection();
@@ -352,19 +386,22 @@ void networkLoop() {
   }
 }
 
-// Notify the networking layer that brightness changed so HA state can be refreshed.
+/** @brief Triggers an MQTT state publish when brightness changes. */
 void networkNotifyBrightnessChange() {
   publishStateAndBrightness();
 }
 
+/** @brief Returns true when Wi-Fi is connected. */
 bool networkIsConnected() {
   return wifiConnected;
 }
 
+/** @brief Returns true when a Wi-Fi attempt is currently running. */
 bool networkIsConnecting() {
   return wifiConnecting;
 }
 
+/** @brief Returns true when the MQTT client is connected to the broker. */
 bool networkIsMqttConnected() {
   return mqttClient.connected();
 }

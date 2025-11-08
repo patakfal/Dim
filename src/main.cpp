@@ -14,20 +14,35 @@ constexpr uint16_t pwmMax = 1023;
 const uint16_t fadeDelayMs = 500;
 const uint32_t toggleWindowMs = 1000;
 
+/**
+ * @brief Converts a 0-100 brightness percentage into a PWM raw value.
+ *
+ * Uses integer math rounded to the nearest integer to keep calculations fast
+ * on the ESP8266 while still matching the perceived brightness curve.
+ */
 constexpr uint16_t percentToRaw(uint8_t percent) {
   return static_cast<uint16_t>((static_cast<uint32_t>(percent) * pwmMax + 50U) / 100U);
 }
 
+/**
+ * @brief Scales a PWM raw value back to a whole percentage.
+ *
+ * This matches percentToRaw so round-tripping produces stable numbers for
+ * MQTT/state reporting.
+ */
 constexpr uint8_t rawToPercent(uint16_t raw) {
   return static_cast<uint8_t>((static_cast<uint32_t>(raw) * 100U + pwmMax / 2U) / pwmMax);
 }
 
-// Discrete brightness curve tuned for perceived linearity.
+/** Lookup table representing a human-friendly discrete brightness curve. */
 constexpr std::array<uint8_t, 20> brightnessStepPercents{
     2,  4,  6,  9,  12, 15, 18, 21, 24, 27,
     30, 33, 40, 47, 53, 60, 67, 80, 90, 100};
 
 template <size_t N>
+/**
+ * @brief Builds the raw PWM equivalents for the configured brightness steps.
+ */
 constexpr std::array<uint16_t, N> computeBrightnessStepRaws(const std::array<uint8_t, N> &percents) {
   std::array<uint16_t, N> raws{};
   for (size_t i = 0; i < N; ++i) {
@@ -40,10 +55,12 @@ constexpr auto brightnessStepRaws = computeBrightnessStepRaws(brightnessStepPerc
 constexpr size_t brightnessStepCount = brightnessStepPercents.size();
 constexpr int fadeIndexStep = 1;
 
+/** @brief Returns the dimmest raw value we allow for smooth fades. */
 constexpr uint16_t minBrightnessRaw() {
   return brightnessStepRaws[0];
 }
 
+/** @brief Returns the brightest raw value available in the lookup table. */
 constexpr uint16_t maxBrightnessRaw() {
   return brightnessStepRaws[brightnessStepCount - 1];
 }
@@ -58,7 +75,7 @@ const char *wifiPassword = "Lartubu1!4!7!8!";
 const uint32_t wifiConnectTimeoutMs = 15000;
 const unsigned long wifiRetryIntervalMs = 10000;
 
-const char *mqttHost = "192.168.50.10"; // TODO: update to your MQTT broker
+const char *mqttHost = "192.168.50.10";
 const uint16_t mqttPort = 1883;
 const char *mqttClientId = "dim-controller";
 const char *mqttUsername = "lynx";
@@ -78,8 +95,12 @@ uint16_t lastSavedBrightness = 0;
 unsigned long lastQuickToggleMs = 0;
 uint8_t quickToggleCount = 0;
 
-// Sense samples during boot jitter; take several readings and use majority vote.
-// Ensures we don't misinterpret the mains state while GPIOs are still stabilizing.
+/**
+ * @brief Samples the mains sense input during boot and returns the majority vote.
+ *
+ * GPIOs can float while the ESP8266 boots, so taking multiple readings avoids
+ * entering the wrong mode before the inputs settle.
+ */
 int readInitialSenseState() {
   int lowCount = 0;
   int highCount = 0;
@@ -95,7 +116,12 @@ int readInitialSenseState() {
   return (lowCount >= highCount) ? LOW : HIGH;
 }
 
-// Convert a raw PWM value to the closest brightness step index for consistent fades.
+/**
+ * @brief Quantizes a raw PWM value to the closest predefined brightness step.
+ *
+ * Keeps fades predictable by ensuring indices always map to the discrete
+ * brightnessStepRaws table rather than arbitrary PWM values.
+ */
 int quantizeToStepIndex(int value) {
   const int firstRaw = static_cast<int>(brightnessStepRaws[0]);
   if (value <= firstRaw) {
@@ -116,8 +142,12 @@ int quantizeToStepIndex(int value) {
   return static_cast<int>(brightnessStepCount) - 1;
 }
 
-// Apply raw PWM value while optionally tracking the closest step.
-// This is the single writer to the LED output, so we keep all bookkeeping here.
+/**
+ * @brief Writes a raw PWM value to the LED and optionally updates bookkeeping.
+ *
+ * Centralizes LED writes so brightness, indices, and MQTT notifications remain
+ * consistent across manual, MQTT, and fade-driven changes.
+ */
 void applyBrightnessValue(uint16_t value, bool updateIndex = true) {
   value = constrain(value, static_cast<uint16_t>(0), pwmMax);
   brightness = value;
@@ -129,8 +159,12 @@ void applyBrightnessValue(uint16_t value, bool updateIndex = true) {
   networkNotifyBrightnessChange();
 }
 
-// Clamp to legal step and write the corresponding raw value.
-// Used by fades and MQTT commands that operate on discrete brightness steps.
+/**
+ * @brief Writes a brightness step index after clamping to valid bounds.
+ *
+ * Used whenever fades or MQTT commands reference discrete steps so the raw PWM
+ * value always matches the lookup table entry.
+ */
 void applyBrightnessIndex(int index) {
   index = constrain(index, 0, static_cast<int>(brightnessStepCount) - 1);
   brightnessIndex = index;
@@ -138,33 +172,36 @@ void applyBrightnessIndex(int index) {
   applyBrightnessValue(stepped, false);
 }
 
+/** @brief Helper exposed to networking so it can print friendly mode names. */
 const char *modeName(Mode mode) {
   return mode == Mode::Fade ? "fade" : "hold";
 }
 
-// Writes a single-line status entry for serial debugging so we can trace mode transitions.
+/**
+ * @brief Emits a concise serial log entry describing the current controller state.
+ *
+ * The logs make it easy to correlate sense toggles, fades, and MQTT commands
+ * when debugging timing issues.
+ */
 void reportStatus(const char *source) {
   const bool mainsPresent = mainsPresentFromSense(lastSenseState);
   const bool isOn = mainsPresent && brightness > 0;
   Serial.print(source);
   Serial.print(" mode=");
   Serial.print(modeName(currentMode));
-  /*
-  Serial.print(" sense_raw=");
-  Serial.print(lastSenseState);
-  Serial.print(" mains=");
-  Serial.print(mainsPresent ? "ON" : "OFF");
-  */
   Serial.print(" light=");
   Serial.print(isOn ? "ON" : "OFF");
   Serial.print(" brightness=");
   Serial.print(rawToPercent(brightness));
   Serial.println("%");
-  // Serial.print("% pwm=");
-  // Serial.println(pwmMax - brightness);
 }
 
-// Fetch brightness from EEPROM if signature matches; guarantees a sane fallback.
+/**
+ * @brief Loads the last persisted brightness from EEPROM.
+ *
+ * Uses a magic byte to validate the stored data and falls back to the minimum
+ * brightness when the signature is missing or corrupted.
+ */
 uint16_t loadBrightnessFromEEPROM() {
   if (EEPROM.read(eepromMagicAddr) == eepromMagic) {
     uint16_t stored = 0;
@@ -182,7 +219,11 @@ uint16_t loadBrightnessFromEEPROM() {
   return lastSavedBrightness;
 }
 
-// Commit the current brightness to EEPROM if it changed, rate-limiting wear.
+/**
+ * @brief Writes the active brightness to EEPROM when it changes.
+ *
+ * Skips redundant commits so we do not burn through the limited write cycles.
+ */
 void persistBrightness() {
   const uint16_t value = brightness;
   if (value == lastSavedBrightness && EEPROM.read(eepromMagicAddr) == eepromMagic) {
@@ -198,7 +239,12 @@ void persistBrightness() {
   Serial.println('%');
 }
 
-// Switch into auto-fade mode, starting at the current step, and prime fade direction.
+/**
+ * @brief Arms the controller for automatic fading starting from the current step.
+ *
+ * Initializes the fade direction, synchronizes the step index, and clears any
+ * quick-toggle counters so subsequent toggles behave predictably.
+ */
 void enterFade(const char *reason) {
   if (currentMode == Mode::Fade) {
     return;
@@ -219,7 +265,12 @@ void enterFade(const char *reason) {
   reportStatus(reason);
 }
 
-// Exit fade mode, store the resulting brightness, and rate-limit new fades.
+/**
+ * @brief Leaves fade mode, persists the resulting brightness, and debounces.
+ *
+ * Applies a temporary suppression window so accidental mains jitters do not
+ * immediately restart a fade.
+ */
 void commitFade(const char *reason) {
   if (currentMode != Mode::Fade) {
     return;
@@ -231,7 +282,9 @@ void commitFade(const char *reason) {
   reportStatus(reason);
 }
 
-// Prevent immediate re-entry into fade after recent state change.
+/**
+ * @brief Returns whether a new fade is allowed based on the suppression timer.
+ */
 bool canStartFade(unsigned long now) {
   if (suppressFadeUntilMs == 0) {
     return true;
@@ -244,8 +297,12 @@ bool canStartFade(unsigned long now) {
   return false;
 }
 
-// Set brightness, store it if needed, and publish status.
-// All MQTT and manual hold actions funnel through here for consistent persistence.
+/**
+ * @brief Applies a brightness value, persists it, and emits status.
+ *
+ * MQTT requests bypass the step quantization so Home Assistant can drive exact
+ * raw values while manual events snap to the discrete curve.
+ */
 void holdAndPersist(int value, const char *reason) {
   currentMode = Mode::Hold;
   const bool isMqttReason = (reason != nullptr && strncmp(reason, "mqtt_", 5) == 0);
@@ -261,20 +318,27 @@ void holdAndPersist(int value, const char *reason) {
   reportStatus(reason);
 }
 
+/** @brief Exposes the current mode to the networking layer. */
 Mode getCurrentMode() {
   return currentMode;
 }
 
+/** @brief Returns the raw brightness mirrored to MQTT. */
 uint16_t getCurrentBrightness() {
   return brightness;
 }
 
+/** @brief Returns the most recent mains sense reading. */
 int getCurrentSenseState() {
   return lastSenseState;
 }
 
-// Interpret quick taps: double-tap to max, single to start fade.
-// Uses a sliding window so mains glitches can't spam mode changes.
+/**
+ * @brief Interprets quick mains toggles as gestures (double-click for max, single for fade).
+ *
+ * Maintains a sliding window counter so noise on the mains sense input cannot
+ * spam mode changes.
+ */
 void handleQuickToggle(unsigned long now) {
   if (now - lastQuickToggleMs <= toggleWindowMs) {
     quickToggleCount++;
@@ -293,7 +357,12 @@ void handleQuickToggle(unsigned long now) {
   }
 }
 
-// Hardware + network initialization. Configures IO, loads brightness, wires callbacks.
+/**
+ * @brief Initializes hardware, networking, and restores persisted brightness.
+ *
+ * Sets up PWM, GPIO, status callbacks, and synchronizes the network layer with
+ * the current state before entering the main loop.
+ */
 void setup() {
   delay(200); // let it boot cleanly
   Serial.begin(115200);
@@ -304,10 +373,12 @@ void setup() {
   delay(10); // allow the sense line to settle before sampling
   EEPROM.begin(eepromSize);
 
+  // Capture baseline mains state so mode logic starts deterministic.
   lastSenseState = readInitialSenseState();
   lastSenseChangeMs = millis();
   senseInactiveStartMs = mainsPresentFromSense(lastSenseState) ? 0 : lastSenseChangeMs;
 
+  // Provide the networking layer with live state callbacks and begin Wi-Fi/MQTT.
   NetworkStatusView view{
     getCurrentMode,
     getCurrentBrightness,
@@ -326,6 +397,7 @@ void setup() {
               mqttUsername,
               mqttPassword);
 
+  // Restore persisted brightness and notify the network if the sense input changed.
   const uint16_t stored = loadBrightnessFromEEPROM();
   applyBrightnessValue(stored);
   lastSavedBrightness = brightness;
@@ -339,17 +411,26 @@ void setup() {
   reportStatus("boot");
 }
 
-// Cooperative scheduler: sample mains state, drive fades, and service MQTT/Wi-Fi.
+/**
+ * @brief Cooperative scheduler that processes networking, sense changes, and fades.
+ *
+ * Must run frequently to keep MQTT responsive and ensure fades stay smooth. Each
+ * iteration performs three jobs:
+ *   1. Pump the networking layer so Wi-Fi/MQTT callbacks execute.
+ *   2. Sample the mains sense input and translate toggles into mode/brightness changes.
+ *   3. Advance fade animations or auto-commit them when mains stay idle.
+ */
 void loop() {
   networkLoop();
 
+  // Continuously read mains sense input to detect human gestures.
   const unsigned long now = millis();
   const int senseState = digitalRead(sensePin);
 
   if (senseState != lastSenseState) {
     const unsigned long delta = now - lastSenseChangeMs;
-    const bool quickToggle = delta <= toggleWindowMs;
-    bool shouldReportHold = false;
+    const bool quickToggle = delta <= toggleWindowMs; // taps closer than toggleWindowMs are treated as gestures
+    bool shouldReportHold = false; // defer logging until we know if we stayed in Hold
 
     if (currentMode == Mode::Fade) {
       if (quickToggle) {
@@ -365,6 +446,7 @@ void loop() {
       shouldReportHold = true;
     }
 
+    // Push updated sense + brightness to MQTT so HA mirrors the physical change.
     lastSenseChangeMs = now;
     lastSenseState = senseState;
     senseInactiveStartMs = mainsPresentFromSense(senseState) ? 0 : now;
@@ -373,9 +455,10 @@ void loop() {
       reportStatus("hold_toggle");
     }
   } else if (!mainsPresentFromSense(senseState) && senseInactiveStartMs == 0) {
-    senseInactiveStartMs = now;
+    senseInactiveStartMs = now; // remember when mains went inactive to timeout fades later
   }
 
+  // Drive fade animation when active; auto-commit if mains stay low.
   if (currentMode == Mode::Fade) {
     if (senseInactiveStartMs != 0 && (now - senseInactiveStartMs) > toggleWindowMs) {
       quickToggleCount = 0;
