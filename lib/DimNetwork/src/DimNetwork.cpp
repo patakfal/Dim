@@ -22,6 +22,12 @@ const char *mqttUser = nullptr;
 const char *mqttPassword = nullptr;
 
 constexpr uint16_t pwmMaxValue = 1023;
+constexpr uint16_t scalePercentToRaw(uint8_t percent) {
+  return static_cast<uint16_t>((static_cast<uint32_t>(percent) * pwmMaxValue + 50U) / 100U);
+}
+constexpr uint8_t scaleRawToPercent(uint16_t raw) {
+  return static_cast<uint8_t>((static_cast<uint32_t>(raw) * 100U + pwmMaxValue / 2U) / pwmMaxValue);
+}
 
 // Topic naming matches the Home Assistant MQTT light blueprint.
 const char *topicState = "mydevice/light/state";
@@ -31,6 +37,7 @@ const char *topicBrightnessSet = "mydevice/light/brightness/set";
 const char *topicAvailability = "mydevice/light/availability";
 
 constexpr uint8_t mqttMinBrightnessPercent = 2;
+constexpr uint16_t mqttMinBrightnessRaw = scalePercentToRaw(mqttMinBrightnessPercent);
 
 NetworkStatusView statusView{};
 void (*holdAndPersistFn)(int value, const char *reason) = nullptr;
@@ -57,6 +64,8 @@ bool isNumeric(const String &text) {
   return true;
 }
 
+// Converts textual MQTT payloads (e.g. "42" or "42%") into internal PWM values.
+// Returns -1 when the payload is invalid so callers can skip acting on it.
 int parseBrightnessValue(String payload) {
   payload.trim();
   if (payload.length() == 0) {
@@ -76,17 +85,13 @@ int parseBrightnessValue(String payload) {
   if (value > 100) {
     value = 100;
   }
-  return static_cast<int>((value * pwmMaxValue) / 100L);
+  return static_cast<int>(scalePercentToRaw(static_cast<uint8_t>(value)));
 }
 
-uint16_t minimumMqttRaw() {
-  return static_cast<uint16_t>((static_cast<uint32_t>(mqttMinBrightnessPercent) * pwmMaxValue + 50U) / 100U);
-}
-
+// Clamp incoming MQTT brightness requests so "OFF" becomes the minimum safe glow.
 uint16_t clampMqttRaw(uint16_t raw) {
-  const uint16_t minRaw = minimumMqttRaw();
-  if (raw < minRaw) {
-    return minRaw;
+  if (raw < mqttMinBrightnessRaw) {
+    return mqttMinBrightnessRaw;
   }
   return raw;
 }
@@ -107,6 +112,7 @@ void publishAvailability(bool online, bool force = false) {
 }
 
 // Push light state and brightness (cached while mains are off) to MQTT.
+// The cached value helps Home Assistant stay in sync even when mains is temporarily absent.
 void publishStateAndBrightness(bool force = false) {
   if (!mqttClient.connected() || !statusView.getBrightness) {
     return;
@@ -133,8 +139,7 @@ void publishStateAndBrightness(bool force = false) {
   }
 
   mqttClient.publish(topicState, isOn ? "ON" : "OFF", true);
-  const uint8_t scaled =
-      static_cast<uint8_t>((static_cast<uint32_t>(publishRaw) * 100U + pwmMaxValue / 2) / pwmMaxValue);
+  const uint8_t scaled = scaleRawToPercent(publishRaw);
   char buffer[5];
   snprintf(buffer, sizeof(buffer), "%u", static_cast<unsigned>(scaled));
   mqttClient.publish(topicBrightness, buffer, true);
@@ -146,12 +151,11 @@ void publishStateAndBrightness(bool force = false) {
 }
 
 // MQTT command handler: supports on/off and brightness set topics.
+// Normalizes payloads (trim/upper-case) before handing them to the dimmer core.
 void handleMqttMessage(char *topic, uint8_t *payload, unsigned int length) {
   String message;
   message.reserve(length);
-  for (unsigned int i = 0; i < length; ++i) {
-    message += static_cast<char>(payload[i]);
-  }
+  message.concat(reinterpret_cast<const char *>(payload), length);
   message.trim();
 
   if (strcmp(topic, topicSet) == 0) {
@@ -163,7 +167,7 @@ void handleMqttMessage(char *topic, uint8_t *payload, unsigned int length) {
       }
     } else if (upper == "OFF") {
       if (holdAndPersistFn) {
-        holdAndPersistFn(static_cast<int>(minimumMqttRaw()), "mqtt_state_force_on");
+        holdAndPersistFn(static_cast<int>(mqttMinBrightnessRaw), "mqtt_state_force_on");
       }
     } else {
       Serial.print(F("MQTT unknown state payload: "));
@@ -187,6 +191,7 @@ void handleMqttMessage(char *topic, uint8_t *payload, unsigned int length) {
   }
 }
 
+// Kick off a Wi-Fi connection attempt if we're idle. Tracks when the attempt began for timeouts.
 void startWiFiAttempt() {
   if (wifiConnecting || !configuredSsid) {
     return;
@@ -201,6 +206,7 @@ void startWiFiAttempt() {
   nextWifiAttemptMs = 0;
 }
 
+// Cooperative Wi-Fi state machine. Handles connect success, failures, and backoff scheduling.
 void handleWiFiState() {
   const unsigned long now = millis();
   const wl_status_t status = WiFi.status();
@@ -244,6 +250,7 @@ void handleWiFiState() {
   }
 }
 
+// Bring MQTT online once Wi-Fi is connected; also reuses the availability topic as LWT.
 void ensureMqttConnection() {
   if (!wifiConnected || !mqttHost) {
     if (mqttClient.connected()) {
@@ -306,6 +313,7 @@ void ensureMqttConnection() {
 
 }  // namespace
 
+// API called from the sketch to hand over credentials, callbacks, and MQTT config.
 void networkInit(const char *ssid,
                  const char *password,
                  uint32_t connectTimeoutMs,
@@ -335,6 +343,7 @@ void networkInit(const char *ssid,
   startWiFiAttempt();
 }
 
+// Must be driven frequently from loop(); keeps Wi-Fi + MQTT responsive.
 void networkLoop() {
   handleWiFiState();
   ensureMqttConnection();
@@ -343,6 +352,7 @@ void networkLoop() {
   }
 }
 
+// Notify the networking layer that brightness changed so HA state can be refreshed.
 void networkNotifyBrightnessChange() {
   publishStateAndBrightness();
 }
