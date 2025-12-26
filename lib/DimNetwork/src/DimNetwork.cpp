@@ -36,7 +36,7 @@ const char *topicBrightness = "mydevice/light/brightness";
 const char *topicBrightnessSet = "mydevice/light/brightness/set";
 const char *topicAvailability = "mydevice/light/availability";
 
-constexpr uint8_t mqttMinBrightnessPercent = 2;
+constexpr uint8_t mqttMinBrightnessPercent = 10;
 constexpr uint16_t mqttMinBrightnessRaw = scalePercentToRaw(mqttMinBrightnessPercent);
 
 NetworkStatusView statusView{};

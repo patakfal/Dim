@@ -2,6 +2,9 @@
 // physical input timing, brightness persistence, and MQTT state reporting.
 #include <Arduino.h>
 #include <EEPROM.h>
+#include <ArduinoOTA.h>
+#include <ESP8266mDNS.h>
+#include <WiFiUdp.h>
 #include <array>
 #include <cstring>
 
@@ -13,6 +16,7 @@ const uint8_t sensePin = D6;
 constexpr uint16_t pwmMax = 1023;
 const uint16_t fadeDelayMs = 500;
 const uint32_t toggleWindowMs = 1000;
+const uint32_t pwmFrequency = 1000;
 
 /**
  * @brief Converts a 0-100 brightness percentage into a PWM raw value.
@@ -36,8 +40,8 @@ constexpr uint8_t rawToPercent(uint16_t raw) {
 
 /** Lookup table representing a human-friendly discrete brightness curve. */
 constexpr std::array<uint8_t, 20> brightnessStepPercents{
-    2,  4,  6,  9,  12, 15, 18, 21, 24, 27,
-    30, 33, 40, 47, 53, 60, 67, 80, 90, 100};
+    10, 12, 14, 16, 18, 21, 24, 27, 30, 33,
+    36, 40, 45, 50, 55, 60, 67, 75, 85, 100};
 
 template <size_t N>
 /**
@@ -80,6 +84,7 @@ const uint16_t mqttPort = 1883;
 const char *mqttClientId = "dim-controller";
 const char *mqttUsername = "lynx";
 const char *mqttPassword = "679ZMtgmzGWqknZ";
+bool otaReady = false;
 
 Mode currentMode = Mode::Hold;
 // Runtime state mirrored to MQTT.
@@ -366,7 +371,7 @@ void handleQuickToggle(unsigned long now) {
 void setup() {
   delay(200); // let it boot cleanly
   Serial.begin(115200);
-  analogWriteFreq(1000);
+  analogWriteFreq(pwmFrequency);
   analogWriteRange(pwmMax);
   pinMode(ledPin, OUTPUT);
   pinMode(sensePin, INPUT);
@@ -411,6 +416,27 @@ void setup() {
   reportStatus("boot");
 }
 
+/** @brief Lazily starts OTA once Wi-Fi is up so uploads can happen without serial. */
+void ensureOtaReady() {
+  if (otaReady || !networkIsConnected()) {
+    return;
+  }
+  ArduinoOTA.setHostname(mqttClientId);
+  ArduinoOTA.onStart([]() { Serial.println(F("ota_start")); });
+  ArduinoOTA.onEnd([]() { Serial.println(F("ota_end")); });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    const unsigned int percent = (progress * 100U) / total;
+    Serial.printf("ota_progress=%u%%\n", percent);
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.print(F("ota_error="));
+    Serial.println(static_cast<unsigned>(error));
+  });
+  ArduinoOTA.begin();
+  otaReady = true;
+  Serial.println(F("ota_ready"));
+}
+
 /**
  * @brief Cooperative scheduler that processes networking, sense changes, and fades.
  *
@@ -422,6 +448,12 @@ void setup() {
  */
 void loop() {
   networkLoop();
+  ensureOtaReady();
+  if (otaReady && networkIsConnected()) {
+    ArduinoOTA.handle();
+  } else if (otaReady && !networkIsConnected()) {
+    otaReady = false;
+  }
 
   // Continuously read mains sense input to detect human gestures.
   const unsigned long now = millis();
