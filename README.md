@@ -8,7 +8,7 @@ keeps Home Assistant (or any MQTT client) in sync with the physical load state.
 
 - **MCU:** Wemos D1 mini / ESP8266.
 - **Outputs:** D7 drives the triac gate (active-low PWM up to 1 kHz).
-- **Inputs:** D6 senses mains presence through an optocoupler.
+- **Inputs:** D6 senses the 12V supply output.
 - **Storage:** On-board EEPROM stores the last brightness so the light returns to
   the same intensity after a restart.
 
@@ -68,13 +68,3 @@ After changing constants, rebuild and flash the firmware.
 ├── platformio.ini      # Build configuration
 └── README.md           # Project documentation
 ```
-
-## Contributing
-
-Pull requests are welcome! Focus areas include:
-
-- Additional safety features (temperature sensing, brown-out detection).
-- Expanded MQTT schema (effects, reporting raw PWM).
-- Improved automated testing (unit tests under `test/`).
-
-Open an issue if you encounter bugs or have ideas for new capabilities.
