@@ -57,6 +57,15 @@ String clientIdBuffer;
 
 // Helpers ------------------------------------------------------------------
 
+void sendSyslog(const char *message) {
+  if (!wifiConnected || !message) {
+    return;
+  }
+  syslogClient.beginPacket(syslogServerIp, syslogServerPort);
+  syslogClient.write(reinterpret_cast<const uint8_t *>(message), strlen(message));
+  syslogClient.endPacket();
+}
+
 /**
  * @brief Returns true if the given string consists solely of digits.
  *
@@ -181,9 +190,7 @@ void publishStateAndBrightness(bool force = false) {
              "<134>dim-controller D6=%s brightness=%u%%",
              senseText,
              static_cast<unsigned>(scaled));
-    syslogClient.beginPacket(syslogServerIp, syslogServerPort);
-    syslogClient.write(reinterpret_cast<const uint8_t *>(syslogMsg), strlen(syslogMsg));
-    syslogClient.endPacket();
+    sendSyslog(syslogMsg);
   }
 }
 
@@ -235,6 +242,7 @@ void startWiFiAttempt() {
   if (wifiConnecting || !configuredSsid) {
     return;
   }
+  sendSyslog("<134>dim-controller wifi_connecting");
   WiFi.disconnect();
   WiFi.mode(WIFI_STA);
   WiFi.begin(configuredSsid, configuredPassword);
@@ -257,6 +265,7 @@ void handleWiFiState() {
       wifiConnecting = false;
       WiFi.disconnect();
       nextWifiAttemptMs = now + wifiRetryIntervalMs;
+      sendSyslog("<134>dim-controller wifi_lost");
       if (mqttClient.connected()) {
         mqttClient.disconnect();
       }
@@ -269,6 +278,7 @@ void handleWiFiState() {
       wifiConnecting = false;
       wifiConnected = true;
       nextWifiAttemptMs = 0;
+      sendSyslog("<134>dim-controller wifi_connected");
       return;
     }
 
@@ -277,6 +287,7 @@ void handleWiFiState() {
       wifiConnecting = false;
       WiFi.disconnect();
       nextWifiAttemptMs = now + wifiRetryIntervalMs;
+      sendSyslog("<134>dim-controller wifi_connect_failed");
     }
     return;
   }
@@ -344,7 +355,11 @@ void ensureMqttConnection() {
     mqttClient.subscribe(topicBrightnessSet);
     publishAvailability(true, true);
     publishStateAndBrightness(true);
+    sendSyslog("<134>dim-controller mqtt_connected");
   } else {
+    char syslogMsg[64];
+    snprintf(syslogMsg, sizeof(syslogMsg), "<134>dim-controller mqtt_connect_failed rc=%d", mqttClient.state());
+    sendSyslog(syslogMsg);
   }
 }
 
@@ -415,6 +430,11 @@ void networkNotifyToggleDetected(int senseState) {
   syslogClient.beginPacket(syslogServerIp, syslogServerPort);
   syslogClient.write(reinterpret_cast<const uint8_t *>(syslogMsg), strlen(syslogMsg));
   syslogClient.endPacket();
+}
+
+/** @brief Emit a raw syslog line (if Wi-Fi is connected). */
+void networkSendSyslog(const char *message) {
+  sendSyslog(message);
 }
 
 /** @brief Returns true when Wi-Fi is connected. */

@@ -14,13 +14,11 @@ keeps Home Assistant (or any MQTT client) in sync with the physical load state.
 
 ## Firmware Highlights
 
-- Discrete 20-step brightness curve tuned for perceived linearity.
-- Quick-toggle gestures: single tap starts an auto fade, double tap jumps to
-  full brightness.
-- MQTT state mirroring with cached brightness so Home Assistant stays accurate
-  even when mains temporarily drop.
-- Configurable minimum “on” level for MQTT OFF commands to keep the load safely lit.
-- Doxygen-style documentation throughout `src/main.cpp` and `lib/DimNetwork`.
+- Discrete 3-step brightness cycle (10 / 50 / 100%) driven by mains toggles.
+- Quick toggles: each tap within the toggle window advances to the next step; longer off/on restores the previous level. Below 50% the toggle window is slightly longer to account for slow discharge.
+- MQTT state mirroring with cached brightness so Home Assistant stays accurate even when mains temporarily drop; MQTT commands may set any brightness.
+- Automatic syslog telemetry (UDP to `192.168.XX.XX:5140`): D6 sense state + brightness, detected toggles, Wi-Fi/MQTT connect/disconnect, and OTA start/stop.
+- EEPROM-backed brightness memory and OTA updates (ArduinoOTA) without serial logging.
 
 ## Building & Flashing
 
@@ -32,11 +30,7 @@ keeps Home Assistant (or any MQTT client) in sync with the physical load state.
    platformio run --target upload
    ```
 
-4. Monitor serial output (115200 baud) to verify Wi-Fi/MQTT status:
-
-   ```bash
-   platformio device monitor
-   ```
+4. (Optional) Monitor syslog on `192.168.50.155:5140` to see Wi‑Fi/MQTT/OTA and toggle/brightness events. Serial logging is intentionally disabled.
 
 The default PlatformIO environment targets the `d1_mini` board and includes the
 required `PubSubClient` dependency (see `platformio.ini`).
@@ -46,10 +40,11 @@ required `PubSubClient` dependency (see `platformio.ini`).
 | Setting | Location | Notes |
 | --- | --- | --- |
 | Wi-Fi SSID / Password | `src/main.cpp` (`wifiSsid`, `wifiPassword`) | Replace with your network credentials. |
-| MQTT broker | `src/main.cpp` (`MQTT_BROKER_HOST` macro) | Set via `build_flags = -DMQTT_BROKER_HOST=\"your.host\"` or edit the default literal. |
+| MQTT broker | `src/main.cpp` (`mqttHost`) | Edit the default literal. |
 | MQTT credentials | `src/main.cpp` (`mqttUsername`, `mqttPassword`) | Optional; leave empty for anonymous brokers. |
 | Topics | `lib/DimNetwork/src/DimNetwork.cpp` | Default: `mydevice/light/...` (state/set/brightness/availability). |
 | Sense polarity | `lib/DimNetwork/src/DimNetwork.h` (`sensePolarity`) | Flip to `SensePolarity::ActiveLow` if hardware inverts the optocoupler. |
+| Syslog target | `lib/DimNetwork/src/DimNetwork.cpp` | Default: `192.168.XX.XX:5140`. Adjust to your syslog host/port. |
 
 After changing constants, rebuild and flash the firmware.
 

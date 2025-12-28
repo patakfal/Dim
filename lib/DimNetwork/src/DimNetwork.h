@@ -75,6 +75,9 @@ void networkNotifyBrightnessChange();
 /** @brief Emit a syslog entry when a mains toggle gesture is detected. */
 void networkNotifyToggleDetected(int senseState);
 
+/** @brief Emit a raw syslog line (if Wi-Fi is connected). */
+void networkSendSyslog(const char *message);
+
 /** @brief Returns true when Wi-Fi is connected and has an IP. */
 bool networkIsConnected();
 /** @brief Returns true while the module is actively attempting to join Wi-Fi. */

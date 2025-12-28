@@ -327,6 +327,7 @@ void ensureOtaReady() {
   ArduinoOTA.setHostname(mqttClientId);
   ArduinoOTA.begin();
   otaReady = true;
+  networkSendSyslog("<134>dim-controller ota_ready");
 }
 
 /**
@@ -344,6 +345,7 @@ void loop() {
     ArduinoOTA.handle();
   } else if (otaReady && !networkIsConnected()) {
     otaReady = false;
+    networkSendSyslog("<134>dim-controller ota_stopped");
   }
 
   // Continuously read mains sense input to detect human gestures.
@@ -353,40 +355,46 @@ void loop() {
   if (senseState != lastSenseState) {
     const unsigned long delta = now - lastSenseChangeMs;
     if (delta < senseDebounceMs) {
-      delay(5);
       return;
     }
     const bool quickToggle = delta <= currentToggleWindowMs(); // below 50% we allow a longer window
     bool shouldReportHold = false; // defer logging until we know if we stayed in Hold
     lastSenseChangeMs = now;
     lastSenseState = senseState;
+    bool brightnessChanged = false;
 
     // When mains drops and we were dim (<30%), force output off to avoid glow from slow discharge.
     if (senseState == LOW && rawToPercent(brightness) < 30) {
       forcedOffPreviousBrightness = brightness;
       applyBrightnessValue(0);
       forcedOffDueToLow = true;
+      brightnessChanged = true;
     }
 
     if (quickToggle) {
       networkNotifyToggleDetected(senseState);
       handleQuickToggle(now);
+      brightnessChanged = true;
     } else if (senseState == HIGH && forcedOffDueToLow) {
       // Restore previous brightness on a long-off/long-on cycle; treat as toggle only if quick.
       forcedOffDueToLow = false;
       if (delta <= currentToggleWindowMs()) {
         networkNotifyToggleDetected(senseState);
         handleQuickToggle(now);
+        brightnessChanged = true;
       } else {
         applyBrightnessValue(forcedOffPreviousBrightness);
         persistBrightness();
+        brightnessChanged = true;
       }
     } else {
       shouldReportHold = true;
     }
 
     // Push updated sense + brightness to MQTT so HA mirrors the physical change.
-    networkNotifyBrightnessChange();
+    if (!brightnessChanged) {
+      networkNotifyBrightnessChange();
+    }
     if (shouldReportHold) {
       reportStatus("hold_toggle");
     }
