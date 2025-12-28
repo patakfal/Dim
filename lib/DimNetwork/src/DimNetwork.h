@@ -72,6 +72,9 @@ void networkLoop();
 /** @brief Notify the network layer that brightness changed so MQTT state can refresh. */
 void networkNotifyBrightnessChange();
 
+/** @brief Emit a syslog entry when a mains toggle gesture is detected. */
+void networkNotifyToggleDetected(int senseState);
+
 /** @brief Returns true when Wi-Fi is connected and has an IP. */
 bool networkIsConnected();
 /** @brief Returns true while the module is actively attempting to join Wi-Fi. */

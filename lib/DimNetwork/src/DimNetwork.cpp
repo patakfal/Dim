@@ -2,6 +2,7 @@
 // forwards incoming MQTT commands back to the main control module.
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
+#include <WiFiUdp.h>
 #include <PubSubClient.h>
 
 #include "DimNetwork.h"
@@ -9,6 +10,7 @@
 namespace {
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
+WiFiUDP syslogClient;
 
 const char *configuredSsid = nullptr;
 const char *configuredPassword = nullptr;
@@ -41,6 +43,9 @@ constexpr uint16_t mqttMinBrightnessRaw = scalePercentToRaw(mqttMinBrightnessPer
 
 NetworkStatusView statusView{};
 void (*holdAndPersistFn)(int value, const char *reason) = nullptr;
+
+const IPAddress syslogServerIp(192, 168, 50, 155);
+constexpr uint16_t syslogServerPort = 5140;
 
 bool wifiConnected = false;
 bool wifiConnecting = false;
@@ -166,6 +171,20 @@ void publishStateAndBrightness(bool force = false) {
   lastOn = isOn;
   lastSense = sense;
   hasPublished = true;
+
+  // Emit a syslog line with the D6 (sensePin) state for external monitoring.
+  if (wifiConnected) {
+    const char *senseText = (sense == LOW) ? "LOW" : "HIGH";
+    char syslogMsg[64];
+    snprintf(syslogMsg,
+             sizeof(syslogMsg),
+             "<134>dim-controller D6=%s brightness=%u%%",
+             senseText,
+             static_cast<unsigned>(scaled));
+    syslogClient.beginPacket(syslogServerIp, syslogServerPort);
+    syslogClient.write(reinterpret_cast<const uint8_t *>(syslogMsg), strlen(syslogMsg));
+    syslogClient.endPacket();
+  }
 }
 
 /**
@@ -191,9 +210,6 @@ void handleMqttMessage(char *topic, uint8_t *payload, unsigned int length) {
       if (holdAndPersistFn) {
         holdAndPersistFn(static_cast<int>(mqttMinBrightnessRaw), "mqtt_state_force_on");
       }
-    } else {
-      Serial.print(F("MQTT unknown state payload: "));
-      Serial.println(message);
     }
     return;
   }
@@ -205,9 +221,6 @@ void handleMqttMessage(char *topic, uint8_t *payload, unsigned int length) {
         const uint16_t clamped = clampMqttRaw(static_cast<uint16_t>(target));
         holdAndPersistFn(static_cast<int>(clamped), "mqtt_brightness_set");
       }
-    } else {
-      Serial.print(F("MQTT invalid brightness payload: "));
-      Serial.println(message);
     }
     return;
   }
@@ -222,7 +235,6 @@ void startWiFiAttempt() {
   if (wifiConnecting || !configuredSsid) {
     return;
   }
-  Serial.println(F("WiFi connecting"));
   WiFi.disconnect();
   WiFi.mode(WIFI_STA);
   WiFi.begin(configuredSsid, configuredPassword);
@@ -245,7 +257,6 @@ void handleWiFiState() {
       wifiConnecting = false;
       WiFi.disconnect();
       nextWifiAttemptMs = now + wifiRetryIntervalMs;
-      Serial.println(F("WiFi lost; will retry"));
       if (mqttClient.connected()) {
         mqttClient.disconnect();
       }
@@ -258,8 +269,6 @@ void handleWiFiState() {
       wifiConnecting = false;
       wifiConnected = true;
       nextWifiAttemptMs = 0;
-      Serial.print(F("WiFi connected IP="));
-      Serial.println(WiFi.localIP());
       return;
     }
 
@@ -268,7 +277,6 @@ void handleWiFiState() {
       wifiConnecting = false;
       WiFi.disconnect();
       nextWifiAttemptMs = now + wifiRetryIntervalMs;
-      Serial.println(F("WiFi connect failed; will retry"));
     }
     return;
   }
@@ -336,10 +344,7 @@ void ensureMqttConnection() {
     mqttClient.subscribe(topicBrightnessSet);
     publishAvailability(true, true);
     publishStateAndBrightness(true);
-    Serial.println(F("MQTT connected"));
   } else {
-    Serial.print(F("MQTT connect failed, rc="));
-    Serial.println(mqttClient.state());
   }
 }
 
@@ -389,6 +394,27 @@ void networkLoop() {
 /** @brief Triggers an MQTT state publish when brightness changes. */
 void networkNotifyBrightnessChange() {
   publishStateAndBrightness();
+}
+
+/** @brief Emits a syslog line when a mains toggle gesture is detected. */
+void networkNotifyToggleDetected(int senseState) {
+  if (!wifiConnected) {
+    return;
+  }
+  const char *senseText = (senseState == LOW) ? "LOW" : "HIGH";
+  uint8_t percent = 0;
+  if (statusView.getBrightness) {
+    percent = scaleRawToPercent(statusView.getBrightness());
+  }
+  char syslogMsg[80];
+  snprintf(syslogMsg,
+           sizeof(syslogMsg),
+           "<134>dim-controller toggle sense=%s brightness=%u%%",
+           senseText,
+           static_cast<unsigned>(percent));
+  syslogClient.beginPacket(syslogServerIp, syslogServerPort);
+  syslogClient.write(reinterpret_cast<const uint8_t *>(syslogMsg), strlen(syslogMsg));
+  syslogClient.endPacket();
 }
 
 /** @brief Returns true when Wi-Fi is connected. */
