@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "DimNetwork.h"
+#include "SysLogger.h"
 
 // Hardware wiring: D7 drives the triac gate (active low), D6 senses mains via opto.
 const uint8_t ledPin = D7;
@@ -84,6 +85,8 @@ const uint16_t mqttPort = 1883;
 const char *mqttClientId = "dim-controller";
 const char *mqttUsername = "lynx";
 const char *mqttPassword = "679ZMtgmzGWqknZ";
+const IPAddress syslogServer(192, 168, 50, 170);
+const uint16_t syslogPort = 514;
 bool otaReady = false;
 
 Mode currentMode = Mode::Hold;
@@ -191,14 +194,11 @@ const char *modeName(Mode mode) {
 void reportStatus(const char *source) {
   const bool mainsPresent = mainsPresentFromSense(lastSenseState);
   const bool isOn = mainsPresent && brightness > 0;
-  Serial.print(source);
-  Serial.print(" mode=");
-  Serial.print(modeName(currentMode));
-  Serial.print(" light=");
-  Serial.print(isOn ? "ON" : "OFF");
-  Serial.print(" brightness=");
-  Serial.print(rawToPercent(brightness));
-  Serial.println("%");
+  SysLogger::logf("%s mode=%s light=%s brightness=%u%%",
+                  source,
+                  modeName(currentMode),
+                  isOn ? "ON" : "OFF",
+                  rawToPercent(brightness));
 }
 
 /**
@@ -213,14 +213,12 @@ uint16_t loadBrightnessFromEEPROM() {
     EEPROM.get(eepromBrightnessAddr, stored);
     if (stored <= pwmMax) {
       lastSavedBrightness = stored;
-      Serial.print(F("eeprom_load="));
-      Serial.print(rawToPercent(stored));
-      Serial.println('%');
+      SysLogger::logf("eeprom_load=%u%%", rawToPercent(stored));
       return stored;
     }
   }
   lastSavedBrightness = minBrightnessRaw();
-  Serial.println(F("eeprom_load=default"));
+  SysLogger::log("eeprom_load=default");
   return lastSavedBrightness;
 }
 
@@ -239,9 +237,7 @@ void persistBrightness() {
   EEPROM.put(eepromBrightnessAddr, value);
   EEPROM.commit();
   lastSavedBrightness = value;
-  Serial.print(F("eeprom_save="));
-  Serial.print(rawToPercent(value));
-  Serial.println('%');
+  SysLogger::logf("eeprom_save=%u%%", rawToPercent(value));
 }
 
 /**
@@ -370,7 +366,7 @@ void handleQuickToggle(unsigned long now) {
  */
 void setup() {
   delay(200); // let it boot cleanly
-  Serial.begin(115200);
+  SysLogger::begin(syslogServer, syslogPort, mqttClientId, mqttClientId);
   analogWriteFreq(pwmFrequency);
   analogWriteRange(pwmMax);
   pinMode(ledPin, OUTPUT);
@@ -422,19 +418,18 @@ void ensureOtaReady() {
     return;
   }
   ArduinoOTA.setHostname(mqttClientId);
-  ArduinoOTA.onStart([]() { Serial.println(F("ota_start")); });
-  ArduinoOTA.onEnd([]() { Serial.println(F("ota_end")); });
+  ArduinoOTA.onStart([]() { SysLogger::log("ota_start"); });
+  ArduinoOTA.onEnd([]() { SysLogger::log("ota_end"); });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     const unsigned int percent = (progress * 100U) / total;
-    Serial.printf("ota_progress=%u%%\n", percent);
+    SysLogger::logf("ota_progress=%u%%", percent);
   });
   ArduinoOTA.onError([](ota_error_t error) {
-    Serial.print(F("ota_error="));
-    Serial.println(static_cast<unsigned>(error));
+    SysLogger::logf("ota_error=%u", static_cast<unsigned>(error));
   });
   ArduinoOTA.begin();
   otaReady = true;
-  Serial.println(F("ota_ready"));
+  SysLogger::log("ota_ready");
 }
 
 /**

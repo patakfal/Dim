@@ -5,6 +5,7 @@
 #include <PubSubClient.h>
 
 #include "DimNetwork.h"
+#include "SysLogger.h"
 
 namespace {
 WiFiClient wifiClient;
@@ -192,8 +193,7 @@ void handleMqttMessage(char *topic, uint8_t *payload, unsigned int length) {
         holdAndPersistFn(static_cast<int>(mqttMinBrightnessRaw), "mqtt_state_force_on");
       }
     } else {
-      Serial.print(F("MQTT unknown state payload: "));
-      Serial.println(message);
+      SysLogger::logf("MQTT unknown state payload: %s", message.c_str());
     }
     return;
   }
@@ -206,8 +206,7 @@ void handleMqttMessage(char *topic, uint8_t *payload, unsigned int length) {
         holdAndPersistFn(static_cast<int>(clamped), "mqtt_brightness_set");
       }
     } else {
-      Serial.print(F("MQTT invalid brightness payload: "));
-      Serial.println(message);
+      SysLogger::logf("MQTT invalid brightness payload: %s", message.c_str());
     }
     return;
   }
@@ -222,7 +221,7 @@ void startWiFiAttempt() {
   if (wifiConnecting || !configuredSsid) {
     return;
   }
-  Serial.println(F("WiFi connecting"));
+  SysLogger::log("WiFi connecting");
   WiFi.disconnect();
   WiFi.mode(WIFI_STA);
   WiFi.begin(configuredSsid, configuredPassword);
@@ -245,7 +244,7 @@ void handleWiFiState() {
       wifiConnecting = false;
       WiFi.disconnect();
       nextWifiAttemptMs = now + wifiRetryIntervalMs;
-      Serial.println(F("WiFi lost; will retry"));
+      SysLogger::log("WiFi lost; will retry");
       if (mqttClient.connected()) {
         mqttClient.disconnect();
       }
@@ -258,8 +257,7 @@ void handleWiFiState() {
       wifiConnecting = false;
       wifiConnected = true;
       nextWifiAttemptMs = 0;
-      Serial.print(F("WiFi connected IP="));
-      Serial.println(WiFi.localIP());
+      SysLogger::logf("WiFi connected IP=%s", WiFi.localIP().toString().c_str());
       return;
     }
 
@@ -268,7 +266,7 @@ void handleWiFiState() {
       wifiConnecting = false;
       WiFi.disconnect();
       nextWifiAttemptMs = now + wifiRetryIntervalMs;
-      Serial.println(F("WiFi connect failed; will retry"));
+      SysLogger::log("WiFi connect failed; will retry");
     }
     return;
   }
@@ -336,10 +334,9 @@ void ensureMqttConnection() {
     mqttClient.subscribe(topicBrightnessSet);
     publishAvailability(true, true);
     publishStateAndBrightness(true);
-    Serial.println(F("MQTT connected"));
+    SysLogger::log("MQTT connected");
   } else {
-    Serial.print(F("MQTT connect failed, rc="));
-    Serial.println(mqttClient.state());
+    SysLogger::logf("MQTT connect failed, rc=%d", mqttClient.state());
   }
 }
 
